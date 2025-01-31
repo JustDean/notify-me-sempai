@@ -9,7 +9,7 @@ class ServiceABC(ABC):
     @abstractmethod
     async def run(self):
         raise NotImplemented
-    
+
     @abstractmethod
     async def stop(self):
         raise NotImplemented

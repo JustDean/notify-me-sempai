@@ -1,9 +1,10 @@
+import json
 import logging
 import asyncio
 import aio_pika
 from dataclasses import dataclass
 
-from notify_me_sempai.base import ServiceABC
+from notify_me_sempai.common import ServiceABC
 from notify_me_sempai.dispatcher import Message
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class Poller(ServiceABC):
             virtualhost=self.config.virtualhost,
         )
         self._chanel = await self._conn.channel()
-        self._broker_q = await self._chanel.declare_queue(
+        self._broker_q = await self._chanel.get_queue(
             self.config.queue_name,
         )
         logger.info("poller is set")
@@ -48,14 +49,19 @@ class Poller(ServiceABC):
                 async for message in q_iter:
                     logger.debug("New message is received")
                     async with message.process():
-                        await self._q.put(
-                            Message(
-                                target="",  # TODO fix
-                                payload=message.body.decode()
+                        try:
+                            unprocessed_message = message.body.decode()
+                            processed_message = json.loads(unprocessed_message)
+                            await self._q.put(
+                                Message(
+                                    target=processed_message['target'],
+                                    payload=processed_message['payload']
+                                )
                             )
-                        )
-                        if not self._isrunning:
-                            break
+                        except Exception as err:
+                            logger.warning(f"Unable to process message {message}: {err}")
+                    if not self._isrunning:
+                        break
         except asyncio.CancelledError:
             logger.info("stopping poller")
         

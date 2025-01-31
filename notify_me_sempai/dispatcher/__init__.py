@@ -2,7 +2,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from notify_me_sempai.base import ServiceABC
+from notify_me_sempai.common import ServiceABC
 from notify_me_sempai.server import client_manager
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,8 @@ class MessageDispatcher(ServiceABC):
             new_message: Message = await self.q.get()
             if new_message.target == "":
                 await self.manager.broadcast(new_message.payload)
-            # TODO handle send to target user
+            else:
+                await  self.manager.target_send(new_message.payload, new_message.target)
         logger.info("message dispatcher is stoped")
     
     async def stop(self):

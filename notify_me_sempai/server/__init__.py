@@ -4,8 +4,10 @@ from dataclasses import dataclass
 import websockets
 from websockets.asyncio.server import ServerConnection
 import websockets.exceptions
+from datetime import datetime, timezone
+import json
 
-from notify_me_sempai.base import ServiceABC
+from notify_me_sempai.common import ServiceABC
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +29,29 @@ class ClientManager:
 
     def unregister(self, client: Client):
         self.clients.pop(client.username)
+
+    @staticmethod
+    def compose_message(payload: str) -> str:
+        message = {
+            "dt": datetime.now(timezone.utc).isoformat(),
+            "payload": payload
+        }
+        return json.dumps(message)
     
-    async def broadcast(self, message: str):
+    async def broadcast(self, payload: str):
         tasks = []
         for cli in self.clients.values():
             tasks.append(
-                cli.ws.send(message, text=True)
+                cli.ws.send(self.compose_message(payload), text=True)
             )
-        asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
     
-    async def target_send(self, message: str, username: str):
+    async def target_send(self, payload: str, username: str):
         client = self.clients.get(username)
         if not client:
-            logger.warning(f"Cant's send message {message} to client {username}. Client is not connected to server")
+            logger.warning(f"Cant's send message {payload} to client {username}. Client is not connected to server")
             return
-        await client.ws.send(message, text=True)
+        await client.ws.send(self.compose_message(payload), text=True)
     
     async def close_all_connections(self):
         tasks = []
