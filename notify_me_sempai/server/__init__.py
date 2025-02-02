@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 import websockets
 from websockets.asyncio.server import ServerConnection
 import websockets.exceptions
 from datetime import datetime, timezone
 import json
+import jwt
 
 from notify_me_sempai.common import ServiceABC
 
@@ -20,15 +22,38 @@ class Client:
     username: str
     ws: ServerConnection
 
-class ClientManager:
-    def __init__(self):
-        self.clients: dict[str, Client] = {}
-    
-    def register(self, client: Client):
-        self.clients[client.username] = client
+@dataclass(kw_only=True, slots=True)
+class TokenData:
+    username: str
 
-    def unregister(self, client: Client):
-        self.clients.pop(client.username)
+class InvalidRequest(Exception):
+    pass
+
+class ClientManager:
+    def __init__(self, secret: str):
+        self.clients: dict[str, Client] = {}
+        self.secret = secret
+
+    def decode_token(self, token: str) -> TokenData:
+        try:
+            decoded_token = jwt.decode(token, self.secret, algorithms=["HS256"])
+        except jwt.exceptions.InvalidSignatureError:
+            raise InvalidRequest("invalid token provided")
+        if not "username" in decoded_token:
+            raise InvalidRequest("invalid token provided")
+        return TokenData(
+            username=decoded_token['username']
+        )
+
+    async def register(self, client: Client):
+        async with asyncio.Lock():
+            self.clients[client.username] = client
+
+    async def unregister(self, client: Client):
+        if client.username not in self.clients:
+            return
+        async with asyncio.Lock():
+            self.clients.pop(client.username)
 
     @staticmethod
     def compose_message(payload: str) -> str:
@@ -60,24 +85,31 @@ class ClientManager:
         await asyncio.gather(*tasks)
     
 
-client_manager = ClientManager()
+client_manager = ClientManager(secret=os.getenv("SECRET", "changeme"))
 
 async def handler(websocket: ServerConnection):
     logger.info("new connection")
     if not websocket.request:
         logging.error("websocket have no request field")
-        await websocket.close(reason="username header is not provided")
+        await websocket.close(reason="invalid request")
         return
-    
-    username = websocket.request.headers.get("username")
-    if not username:
-        await websocket.close(reason="username header is not provided")
+
+    token = websocket.request.headers.get("token")
+    if not token:
+        await websocket.close(reason="token header is not provided")
         return
+
+    try:
+        token_data: TokenData = client_manager.decode_token(token)
+    except InvalidRequest:
+        await websocket.close(reason="invalid token provided")
+        return
+
     client = Client(
-        username=username,
+        username=token_data.username,
         ws=websocket,
     )
-    client_manager.register(
+    await client_manager.register(
         client
     )
     try:
@@ -88,7 +120,7 @@ async def handler(websocket: ServerConnection):
     except Exception as err:
         logger.error(f"Connection was not closed properly {err}")
     finally:
-        client_manager.unregister(client)
+        await client_manager.unregister(client)
 
 @dataclass
 class WsServerConfig:
